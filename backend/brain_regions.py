@@ -392,117 +392,159 @@ def compute_virality_score(channel_activations: dict) -> dict:
 
 def analyze_engagement_drops(
     temporal_scores: list[float],
-    region_activations: dict,
+    channel_activations: dict,
     window_size: int = 3,
     drop_threshold: float = 10.0,
 ) -> list[dict]:
-    """
-    Detect moments where engagement significantly drops and diagnose the cause.
+    """Detect seconds where engagement drops and diagnose the likely cause.
 
-    Args:
-        temporal_scores: Per-second overall virality scores.
-        region_activations: Per-category activation data.
-        window_size: Rolling window for smoothing.
-        drop_threshold: Minimum score decrease to flag as a drop.
-
-    Returns:
-        List of drop events with timing, severity, cause, and recommendations.
+    A drop's "cause" is the channel whose signed change best explains the
+    drop — e.g. a spike in dlpfc_control (polarity -1) is as much a cause
+    as a dip in ofc_reward (polarity +1).
     """
     scores = np.array(temporal_scores)
     if len(scores) < window_size + 1:
         return []
 
-    # Smooth scores with rolling average
     kernel = np.ones(window_size) / window_size
     smoothed = np.convolve(scores, kernel, mode="valid")
 
     drops = []
     for i in range(1, len(smoothed)):
         delta = smoothed[i] - smoothed[i - 1]
-        if delta < -drop_threshold:
-            second = i + window_size // 2
-            severity = abs(delta)
+        if delta >= -drop_threshold:
+            continue
 
-            # Diagnose which categories dropped most
-            category_deltas = {}
-            for key, data in region_activations.items():
-                temporal = np.array(data["temporal_activation"])
-                if second < len(temporal) and second > 0:
-                    cat_delta = temporal[second] - temporal[second - 1]
-                    category_deltas[key] = {
-                        "delta": float(cat_delta),
-                        "display_name": data["display_name"],
-                    }
+        second = i + window_size // 2
+        severity = abs(delta)
 
-            # Sort by most negative delta to find the primary cause
-            sorted_causes = sorted(category_deltas.items(), key=lambda x: x[1]["delta"])
-            primary_cause = sorted_causes[0] if sorted_causes else None
+        # Score each channel's contribution to the drop: a positive-polarity
+        # channel *dropping* is bad; a negative-polarity channel *rising* is
+        # also bad. Use -polarity*cat_delta so "more negative = worse."
+        channel_scores = {}
+        for key, data in channel_activations.items():
+            temporal = np.array(data["temporal_activation"])
+            if 0 < second < len(temporal):
+                cat_delta = float(temporal[second] - temporal[second - 1])
+                badness = -data["polarity"] * cat_delta
+                channel_scores[key] = {
+                    "delta": cat_delta,
+                    "badness": badness,
+                    "display_name": data["display_name"],
+                }
 
-            cause_key = primary_cause[0] if primary_cause else "unknown"
-            recommendation = _get_recommendation(cause_key, second, severity)
+        sorted_causes = sorted(
+            channel_scores.items(),
+            key=lambda x: x[1]["badness"],
+            reverse=True,
+        )
+        primary_cause_key = sorted_causes[0][0] if sorted_causes else "unknown"
+        primary_cause_name = (
+            sorted_causes[0][1]["display_name"] if sorted_causes else "Unknown"
+        )
+        recommendation = _get_recommendation(primary_cause_key, second, severity)
 
-            drops.append({
-                "second": second,
-                "severity": round(severity, 1),
-                "score_before": round(float(smoothed[i - 1]), 1),
-                "score_after": round(float(smoothed[i]), 1),
-                "primary_cause": cause_key,
-                "primary_cause_name": primary_cause[1]["display_name"] if primary_cause else "Unknown",
-                "category_deltas": {
-                    k: {"delta": round(v["delta"], 4), "name": v["display_name"]}
-                    for k, v in sorted_causes[:3]
-                },
-                "recommendation": recommendation,
-            })
+        drops.append({
+            "second": second,
+            "severity": round(severity, 1),
+            "score_before": round(float(smoothed[i - 1]), 1),
+            "score_after": round(float(smoothed[i]), 1),
+            "primary_cause": primary_cause_key,
+            "primary_cause_name": primary_cause_name,
+            "channel_deltas": {
+                k: {"delta": round(v["delta"], 4), "name": v["display_name"]}
+                for k, v in sorted_causes[:3]
+            },
+            "recommendation": recommendation,
+        })
 
-    # Sort by severity and return top drops
     drops.sort(key=lambda x: x["severity"], reverse=True)
     return drops[:10]
 
 
 def _get_recommendation(cause_key: str, second: int, severity: float) -> str:
-    """Generate an actionable recommendation based on the engagement drop cause."""
     recommendations = {
-        "visual_attention": (
-            f"At second {second}, visual attention dropped significantly (severity: {severity:.1f}). "
-            "Consider adding more visually dynamic elements here — a scene change, "
-            "text overlay, zoom effect, or bright color contrast to recapture the viewer's eye."
+        "ofc_reward": (
+            f"At second {second}, orbitofrontal reward signaling dropped "
+            f"(severity: {severity:.1f}). The viewer stopped finding the content "
+            "immediately gratifying. Inject a payoff, punchline, or visual reward."
         ),
-        "auditory_engagement": (
+        "vmpfc_valuation": (
+            f"At second {second}, vmPFC valuation weakened (severity: {severity:.1f}). "
+            "The content stopped feeling personally relevant. Add a relatable moment, "
+            "direct address, or self-referential callback."
+        ),
+        "pcc_self_reward": (
+            f"At second {second}, self-referential reward processing dropped "
+            f"(severity: {severity:.1f}). The viewer disengaged from personal relevance. "
+            "Bring the focus back to the viewer's experience or identity."
+        ),
+        "posterior_insula": (
+            f"At second {second}, reward-anticipation signaling dropped "
+            f"(severity: {severity:.1f}). Tease what's coming next — a countdown, "
+            "a reveal, or a question."
+        ),
+        "dlpfc_control": (
+            f"At second {second}, the cognitive-control brake re-engaged "
+            f"(severity: {severity:.1f}) — the viewer regained self-control and may "
+            "scroll away. Break the pattern: unexpected cut, loud SFX, or surprise."
+        ),
+        "ifg_inhibition": (
+            f"At second {second}, inhibitory control rose (severity: {severity:.1f}). "
+            "Content became skippable. Add novelty or a jarring beat change."
+        ),
+        "vlpfc_negative": (
+            f"At second {second}, negative-feedback signaling spiked "
+            f"(severity: {severity:.1f}). The content felt off-putting. Review for "
+            "tonal mismatch, awkward pacing, or conflict without resolution."
+        ),
+        "anterior_insula": (
+            f"At second {second}, conflict/aversion signaling rose "
+            f"(severity: {severity:.1f}). Something felt wrong to the viewer — check "
+            "for jarring transitions or confusing cuts."
+        ),
+        "visual_cortex": (
+            f"At second {second}, visual engagement dropped (severity: {severity:.1f}). "
+            "Add a scene change, text overlay, zoom, or high-contrast visual."
+        ),
+        "fusiform_face": (
+            f"At second {second}, face-processing activation dropped "
+            f"(severity: {severity:.1f}). Bring a face back on screen — faces are "
+            "primary engagement drivers."
+        ),
+        "auditory_cortex": (
             f"At second {second}, auditory engagement dropped (severity: {severity:.1f}). "
-            "The audio may feel flat or repetitive at this point. Try adding a sound effect, "
-            "music transition, voice tone change, or a brief silence followed by impact."
+            "Add a sound effect, music swell, voice change, or impactful silence."
         ),
-        "emotional_response": (
-            f"At second {second}, emotional response weakened (severity: {severity:.1f}). "
-            "The content may feel emotionally neutral here. Inject a surprise element, "
-            "relatable moment, humor, or tension to re-engage the viewer emotionally."
+        "temporal_pole": (
+            f"At second {second}, social-cognition engagement dropped "
+            f"(severity: {severity:.1f}). Add a social cue — a reaction, eye contact, "
+            "or interpersonal moment."
         ),
-        "social_processing": (
-            f"At second {second}, social processing dropped (severity: {severity:.1f}). "
-            "There may be fewer faces or human elements visible. Show a face, "
-            "a reaction, or a person-to-person interaction to boost social engagement."
+        "stg_social": (
+            f"At second {second}, social-feedback processing dropped "
+            f"(severity: {severity:.1f}). Reintroduce a peer/crowd element or "
+            "social reaction."
         ),
-        "narrative_language": (
-            f"At second {second}, narrative engagement dropped (severity: {severity:.1f}). "
-            "The story or message may have stalled. Add a hook, rhetorical question, "
-            "plot twist, or new piece of information to pull the viewer back in."
+        "acc_mcc": (
+            f"At second {second}, emotional salience dropped (severity: {severity:.1f}). "
+            "Inject a surprise, a twist, or a change in emotional register."
         ),
-        "reward_motivation": (
-            f"At second {second}, reward/motivation signaling dropped (severity: {severity:.1f}). "
-            "The viewer may not feel anticipation. Tease an upcoming payoff, "
-            "use a countdown, or create curiosity about what happens next."
+        "parahippocampal": (
+            f"At second {second}, expectation/memory engagement dropped "
+            f"(severity: {severity:.1f}). Subvert an expectation or call back a "
+            "detail from earlier."
         ),
-        "default_mode_network": (
-            f"At second {second}, mind-wandering signals spiked (severity: {severity:.1f}). "
-            "The content became too predictable or slow. Break the pattern with an unexpected "
-            "cut, a direct address to the viewer, or a rapid change in pacing."
+        "dmn_drift": (
+            f"At second {second}, mind-wandering signals spiked "
+            f"(severity: {severity:.1f}). Content became too predictable. Break the "
+            "pattern with pacing change or direct address."
         ),
     }
     return recommendations.get(
         cause_key,
         f"At second {second}, overall engagement dropped (severity: {severity:.1f}). "
-        "Review the content at this timestamp and consider adding more dynamic elements.",
+        "Review the content at this timestamp and consider adding dynamic elements.",
     )
 
 

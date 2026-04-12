@@ -14,91 +14,200 @@ try:
 except ImportError:
     NILEARN_AVAILABLE = False
 
-# ── Engagement category definitions ──────────────────────────────────────────
-# Each category maps Destrieux atlas label substrings to a weight and polarity.
-# Polarity: +1 = engagement driver, -1 = disengagement signal.
+# ── Evidence-grounded channel schema ─────────────────────────────────────────
+# Each channel maps Destrieux atlas label substrings to a weight and polarity.
+# Polarity: +1 = engagement driver, -1 = disengagement / suppression signal.
+# The `citation` field ties every channel back to a paper finding — see
+# docs/superpowers/specs/2026-04-12-evidence-matched-brain-region-mapping-design.md
 
-ENGAGEMENT_CATEGORIES = {
-    "visual_attention": {
-        "label_patterns": [
-            "G_occipital", "S_calcarine", "G_cuneus", "G_lingual",
-            "Pole_occipital", "S_oc_sup_and_transversal",
-            "S_occipital_ant", "G_oc-temp_lat-fusifor",
-        ],
-        "weight": 0.18,
+CHANNELS = {
+    # ── Reward / valuation (polarity +1) ────────────────────────────────────
+    "ofc_reward": {
+        "patterns": ["G_orbital", "S_orbital_lateral", "S_orbital-H_Shaped"],
         "polarity": 1,
-        "display_name": "Visual Attention",
-        "description": "Visual cortex activation — how much the video captures visual attention.",
+        "display_name": "OFC Reward",
+        "description": "Orbitofrontal cortex — reward valuation and immediate gratification.",
+        "citation": "Gao 2025 — ↑GMV in OFC scales with SVA severity (r=0.353).",
     },
-    "auditory_engagement": {
-        "label_patterns": [
+    "vmpfc_valuation": {
+        "patterns": [
+            "G_front_med", "G_subcallosal", "G_rectus",
+            "S_suborbital", "S_orbital_med-olfact",
+        ],
+        "polarity": 1,
+        "display_name": "vmPFC Valuation",
+        "description": "Ventromedial PFC — subjective value and self-relevance.",
+        "citation": "Davey 2010, Gunther 2010, Wikman 2022 — vmPFC activated by positive feedback.",
+    },
+    "pcc_self_reward": {
+        "patterns": [
+            "G_cingul-Post-dorsal", "G_cingul-Post-ventral",
+            "S_pericallosal", "G_precuneus",
+        ],
+        "polarity": 1,
+        "display_name": "PCC Self-Reward",
+        "description": "Posterior cingulate / precuneus — self-referential reward processing.",
+        "citation": "Sherman 2016 (self-photos w/ many likes); Gao 2025 (↑ReHo PCC in SVA).",
+    },
+    "posterior_insula": {
+        "patterns": ["S_circular_insula_inf", "G_Ins_lg_and_S_cent_ins"],
+        "polarity": 1,
+        "display_name": "Posterior Insula",
+        "description": "Posterior insula — reward anticipation from positive feedback.",
+        "citation": "Wikman 2022 — left posterior insula for positive feedback.",
+    },
+
+    # ── Cognitive control (polarity -1: suppression = immersion) ────────────
+    "dlpfc_control": {
+        "patterns": ["G_front_middle", "G_front_sup", "S_front_sup", "S_front_middle"],
+        "polarity": -1,
+        "display_name": "DLPFC Control",
+        "description": "Dorsolateral PFC — cognitive control. Lower activation = more immersed.",
+        "citation": "Su 2023 — prefrontal suppression during short-video viewing; Gao 2025 (DLPFC ReHo mediates envy→SVA).",
+    },
+    "ifg_inhibition": {
+        "patterns": ["G_front_inf-Opercular", "G_front_inf-Triangul", "S_front_inf"],
+        "polarity": -1,
+        "display_name": "IFG Inhibition",
+        "description": "Inferior frontal gyrus — response inhibition. Lower = more immersed.",
+        "citation": "Su 2023 — IFG/MFG deactivation signature of short-video immersion.",
+    },
+    "vlpfc_negative": {
+        "patterns": ["G_front_inf-Orbital"],
+        "polarity": -1,
+        "display_name": "vlPFC (Negative)",
+        "description": "Ventrolateral PFC — activates for negative feedback / conflict.",
+        "citation": "Wikman 2022 — vlPFC activates for negative feedback.",
+    },
+    "anterior_insula": {
+        "patterns": ["G_insular_short", "S_circular_insula_ant", "S_circular_insula_sup"],
+        "polarity": -1,
+        "display_name": "Anterior Insula",
+        "description": "Anterior insula — negative feedback and conflict signal.",
+        "citation": "Wikman 2022 — anterior insula for negative feedback.",
+    },
+
+    # ── Sensory (polarity +1) ───────────────────────────────────────────────
+    "visual_cortex": {
+        "patterns": [
+            "G_occipital_sup", "G_occipital_middle", "G_oc-temp_med-Lingual",
+            "S_calcarine", "G_cuneus", "Pole_occipital",
+        ],
+        "polarity": 1,
+        "display_name": "Visual Cortex",
+        "description": "Occipital cortex — visual processing and scene parsing.",
+        "citation": "Sherman 2016 — lateral occipital for self-photos with likes.",
+    },
+    "fusiform_face": {
+        "patterns": ["G_oc-temp_lat-fusifor"],
+        "polarity": 1,
+        "display_name": "Fusiform (Faces)",
+        "description": "Fusiform face area — face detection and recognition.",
+        "citation": "Kanwisher 1997 (FFA); faces are primary engagement drivers.",
+    },
+    "auditory_cortex": {
+        "patterns": [
             "G_temp_sup-G_T_transv", "S_temporal_transverse",
             "G_temp_sup-Plan_tempo", "G_temp_sup-Lateral",
-            "S_temporal_sup",
         ],
-        "weight": 0.14,
         "polarity": 1,
-        "display_name": "Auditory Engagement",
-        "description": "Auditory cortex activation — how engaging the audio/music/speech is.",
+        "display_name": "Auditory Cortex",
+        "description": "Auditory cortex — music, voice, and sound effect processing.",
+        "citation": "Standard auditory processing (STG / Heschl's).",
     },
-    "emotional_response": {
-        "label_patterns": [
-            "G_cingul-Post-dorsal", "G_cingul-Post-ventral",
+
+    # ── Social cognition (polarity +1) ──────────────────────────────────────
+    "temporal_pole": {
+        "patterns": ["Pole_temporal", "G_temp_sup-Plan_polar"],
+        "polarity": 1,
+        "display_name": "Temporal Pole",
+        "description": "Temporal pole — social cognition, theory of mind, empathy.",
+        "citation": "Gao 2025 — TP ReHo pattern mediates envy→SVA; Olson 2007 (TP social cognition).",
+    },
+    "stg_social": {
+        "patterns": ["G_temporal_middle", "S_temporal_sup"],
+        "polarity": 1,
+        "display_name": "STG (Social)",
+        "description": "Superior temporal gyrus — peer feedback and social stimuli.",
+        "citation": "Wikman 2022 — STG activates for peer feedback.",
+    },
+
+    # ── Affective (polarity +1) ─────────────────────────────────────────────
+    "acc_mcc": {
+        "patterns": [
             "G_and_S_cingul-Ant", "G_and_S_cingul-Mid-Ant",
-            "G_and_S_cingul-Mid-Post", "G_oc-temp_med-Parahip",
-            "S_cingul-Marginalis",
+            "G_and_S_cingul-Mid-Post",
         ],
-        "weight": 0.18,
         "polarity": 1,
-        "display_name": "Emotional Response",
-        "description": "Cingulate and parahippocampal activation — emotional processing and memory encoding.",
+        "display_name": "ACC / MCC",
+        "description": "Anterior and mid cingulate — feedback valence and emotional salience.",
+        "citation": "Davey 2010 (mid-cingulate for positive feedback); Somerville 2006 (ACC valence).",
     },
-    "social_processing": {
-        "label_patterns": [
-            "G_oc-temp_lat-fusifor", "G_temp_sup-Plan_polar",
-            "Pole_temporal", "G_temporal_middle",
-            "S_temporal_inf",
-        ],
-        "weight": 0.14,
+    "parahippocampal": {
+        "patterns": ["G_oc-temp_med-Parahip"],
         "polarity": 1,
-        "display_name": "Social Processing",
-        "description": "Fusiform and temporal pole activation — face recognition and social cognition.",
+        "display_name": "Parahippocampal",
+        "description": "Parahippocampal gyrus — expectation violation / memory encoding.",
+        "citation": "Gunther 2010 — parahippocampal for expectation violation.",
     },
-    "narrative_language": {
-        "label_patterns": [
-            "G_front_inf-Opercular", "G_front_inf-Triangul",
-            "G_temp_sup-Lateral", "S_front_inf",
-            "G_pariet_inf-Angular", "G_pariet_inf-Supramar",
-        ],
-        "weight": 0.14,
-        "polarity": 1,
-        "display_name": "Narrative & Language",
-        "description": "Broca's area, Wernicke's area, and angular gyrus — narrative comprehension and language.",
-    },
-    "reward_motivation": {
-        "label_patterns": [
-            "G_front_middle", "G_front_sup",
-            "G_and_S_subcentral", "G_rectus",
-            "G_subcallosal", "S_orbital_lateral",
-            "S_orbital-H_Shaped", "G_orbital",
-        ],
-        "weight": 0.14,
-        "polarity": 1,
-        "display_name": "Reward & Motivation",
-        "description": "Prefrontal and orbitofrontal activation — reward anticipation and motivation.",
-    },
-    "default_mode_network": {
-        "label_patterns": [
-            "G_precuneus", "G_front_med",
-            "G_pariet_inf-Angular", "Pole_temporal",
-            "G_cingul-Post-dorsal",
-        ],
-        "weight": 0.08,
+
+    # ── Default mode drift (polarity -1) ────────────────────────────────────
+    "dmn_drift": {
+        "patterns": ["G_pariet_inf-Angular", "S_parieto_occipital"],
         "polarity": -1,
-        "display_name": "Mind Wandering (DMN)",
-        "description": "Default mode network — high activation indicates the viewer's mind is drifting.",
+        "display_name": "DMN Drift",
+        "description": "Default mode network — high activation = mind-wandering.",
+        "citation": "Standard DMN; inverted when decoupled from reward regions.",
     },
 }
+
+# Priority order for vertex deduplication. Earlier channels claim vertices
+# first; later channels only get vertices not already claimed.
+DEDUP_PRIORITY = [
+    "ofc_reward", "vmpfc_valuation", "pcc_self_reward", "fusiform_face",
+    "temporal_pole", "anterior_insula", "posterior_insula", "acc_mcc",
+    "dlpfc_control", "ifg_inhibition", "visual_cortex", "auditory_cortex",
+    "stg_social", "parahippocampal", "vlpfc_negative", "dmn_drift",
+]
+
+# Signed weights applied to each channel's feature in the composite signatures.
+# Negative weights on cognitive-control channels encode polarity directly.
+
+IMMERSION_WEIGHTS = {
+    "ofc_reward":       +0.22,
+    "vmpfc_valuation":  +0.18,
+    "pcc_self_reward":  +0.10,
+    "posterior_insula": +0.06,
+    "dlpfc_control":    -0.15,
+    "ifg_inhibition":   -0.08,
+    "vlpfc_negative":   -0.04,
+    "anterior_insula":  -0.06,
+    "visual_cortex":    +0.08,
+    "auditory_cortex":  +0.06,
+    "fusiform_face":    +0.06,
+    "temporal_pole":    +0.08,
+    "stg_social":       +0.04,
+    "acc_mcc":          +0.06,
+    "parahippocampal":  +0.03,
+    "dmn_drift":        -0.06,
+}
+
+HOOK_WEIGHTS = {
+    "ofc_reward":       +0.20,
+    "vmpfc_valuation":  +0.15,
+    "dlpfc_control":    -0.15,
+    "visual_cortex":    +0.10,
+    "auditory_cortex":  +0.08,
+}
+
+PEAK_END_WEIGHTS = {
+    "vmpfc_valuation":  +0.20,
+    "pcc_self_reward":  +0.18,
+    "ofc_reward":       +0.15,
+    "fusiform_face":    +0.10,
+}
+
+SIGNATURE_WEIGHTS = {"immersion": 0.60, "hook": 0.20, "peak_end": 0.20}
 
 
 class BrainRegionMapper:

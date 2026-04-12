@@ -652,7 +652,7 @@
               <div className="card">
                 <div className="card-title">Brain Channels</div>
                 {sortedChannels.map(([key, ch]) => {
-                  const contribPct = Math.min(100, Math.abs(ch.immersion_contribution) * 300);
+                  const contribPct = Math.min(100, Math.abs(ch.immersion_contribution) * 150);
                   const label =
                     ch.polarity === -1
                       ? `${ch.display_name} (lower is better)`

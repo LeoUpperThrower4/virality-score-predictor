@@ -180,44 +180,53 @@ DEDUP_PRIORITY = [
     "stg_social", "parahippocampal", "vlpfc_negative", "dmn_drift",
 ]
 
-# Signed weights applied to each channel's feature in the composite signatures.
-# Negative weights on cognitive-control channels encode polarity directly.
+# All-positive weights applied to polarity-rectified engagement features.
+# Polarity is already baked into each feature (see rectified_mean), so weights
+# are unsigned magnitudes — a channel contributes when it behaves as its polarity
+# says it should (positive-polarity = activated; negative-polarity = suppressed).
 
 IMMERSION_WEIGHTS = {
-    "ofc_reward":       +0.22,
-    "vmpfc_valuation":  +0.18,
-    "pcc_self_reward":  +0.10,
-    "posterior_insula": +0.06,
-    "dlpfc_control":    -0.15,
-    "ifg_inhibition":   -0.08,
-    "vlpfc_negative":   -0.04,
-    "anterior_insula":  -0.06,
-    "visual_cortex":    +0.08,
-    "auditory_cortex":  +0.06,
-    "fusiform_face":    +0.06,
-    "temporal_pole":    +0.08,
-    "stg_social":       +0.04,
-    "acc_mcc":          +0.06,
-    "parahippocampal":  +0.03,
-    "dmn_drift":        -0.06,
+    "ofc_reward":       0.22,
+    "vmpfc_valuation":  0.18,
+    "pcc_self_reward":  0.10,
+    "posterior_insula": 0.06,
+    "dlpfc_control":    0.15,
+    "ifg_inhibition":   0.08,
+    "vlpfc_negative":   0.04,
+    "anterior_insula":  0.06,
+    "visual_cortex":    0.08,
+    "auditory_cortex":  0.06,
+    "fusiform_face":    0.06,
+    "temporal_pole":    0.08,
+    "stg_social":       0.04,
+    "acc_mcc":          0.06,
+    "parahippocampal":  0.03,
+    "dmn_drift":        0.06,
 }
 
 HOOK_WEIGHTS = {
-    "ofc_reward":       +0.20,
-    "vmpfc_valuation":  +0.15,
-    "dlpfc_control":    -0.15,
-    "visual_cortex":    +0.10,
-    "auditory_cortex":  +0.08,
+    "ofc_reward":       0.20,
+    "vmpfc_valuation":  0.15,
+    "dlpfc_control":    0.15,
+    "visual_cortex":    0.10,
+    "auditory_cortex":  0.08,
 }
 
 PEAK_END_WEIGHTS = {
-    "vmpfc_valuation":  +0.20,
-    "pcc_self_reward":  +0.18,
-    "ofc_reward":       +0.15,
-    "fusiform_face":    +0.10,
+    "vmpfc_valuation":  0.20,
+    "pcc_self_reward":  0.18,
+    "ofc_reward":       0.15,
+    "fusiform_face":    0.10,
 }
 
 SIGNATURE_WEIGHTS = {"immersion": 0.60, "hook": 0.20, "peak_end": 0.20}
+
+# Sigmoid offsets. TRIBE predictions are z-scored per vertex, so polarity-
+# rectified engagement typically lives in [0, ~1.5]. A weighted sum of those
+# values with the above weights sits roughly in [0, 1.3]. Subtracting these
+# offsets centers a "typical" clip near sigmoid(0) = 0.5 = 50/100.
+OVERALL_OFFSET = 0.7
+TEMPORAL_OFFSET = 0.3
 
 
 class BrainRegionMapper:
@@ -273,15 +282,25 @@ class BrainRegionMapper:
         self._initialized = True
 
     def compute_channel_activations(self, predictions: np.ndarray) -> dict:
-        """Compute per-channel temporal activation and summary features.
+        """Compute per-channel temporal activation and polarity-rectified features.
+
+        TRIBE v2 emits z-scored BOLD (mean≈0, std≈1 per vertex), so a raw mean
+        over a whole clip collapses to ~0 for every video. Instead we compute a
+        polarity-rectified "engagement" score: mean(max(0, polarity * x)). This
+        counts above-baseline activation for +1 channels and below-baseline
+        suppression for -1 channels — always ≥ 0, and meaningfully different
+        across clips.
 
         Args:
             predictions: Shape (n_timesteps, n_vertices) from TRIBE v2.
 
         Returns:
             Dict keyed by channel name. Each value has:
-              - temporal_activation: list[float] per-second channel mean
-              - mean, hook_3s, peak_end_3s: scalar features
+              - temporal_activation: list[float] raw per-second channel mean
+                (z-scored, signed; used by the UI temporal chart and drop detector)
+              - engagement, hook_3s, peak_end_3s: polarity-rectified scalars
+                fed into the composite score
+              - mean_raw: raw (unrectified) mean; kept for debugging
               - n_vertices, polarity, display_name, description, citation
         """
         self.initialize()
@@ -305,19 +324,24 @@ class BrainRegionMapper:
             else:
                 temporal = predictions[:, mask].mean(axis=1)
 
+            polarity = channel_info["polarity"]
+            rectified = np.maximum(0.0, polarity * temporal)
+
+            engagement = float(np.mean(rectified))
             if n_timesteps >= 3:
-                hook = float(np.mean(temporal[:3]))
-                peak_end = float(np.mean(temporal[-3:]))
+                hook = float(np.mean(rectified[:3]))
+                peak_end = float(np.mean(rectified[-3:]))
             else:
-                hook = peak_end = float(np.mean(temporal))
+                hook = peak_end = engagement
 
             results[channel_key] = {
                 "temporal_activation": temporal.tolist(),
-                "mean": float(np.mean(temporal)),
+                "engagement": engagement,
                 "hook_3s": hook,
                 "peak_end_3s": peak_end,
+                "mean_raw": float(np.mean(temporal)),
                 "n_vertices": int(mask.sum()),
-                "polarity": channel_info["polarity"],
+                "polarity": polarity,
                 "display_name": channel_info["display_name"],
                 "description": channel_info["description"],
                 "citation": channel_info["citation"],
@@ -327,15 +351,16 @@ class BrainRegionMapper:
 
 
 def compute_virality_score(channel_activations: dict) -> dict:
-    """Compute composite virality from channel activations.
+    """Compute composite virality from polarity-rectified channel engagement.
 
-    Three signatures — immersion (full), hook (first 3s), peak-end (last 3s) —
-    are each a signed weighted sum of channel features. Raw TRIBE outputs feed
-    directly into the sums; no per-clip min-max rescaling.
+    Three signatures — immersion (full clip), hook (first 3s), peak-end (last 3s)
+    — are each a weighted sum of polarity-rectified engagement features. Weights
+    are all-positive; polarity is baked into the feature upstream. The weighted
+    sums are shifted by OVERALL_OFFSET / TEMPORAL_OFFSET before sigmoid so a
+    baseline clip centers near 50/100 rather than 70/100.
 
     Returns:
-        Dict with overall_score (0-100), signatures, temporal_scores,
-        and channels (feature dump for the UI).
+        Dict with overall_score (0-100), signatures, temporal_scores, channels.
     """
     def weighted_sum(weights: dict, feature: str) -> float:
         total = 0.0
@@ -344,46 +369,52 @@ def compute_virality_score(channel_activations: dict) -> dict:
                 total += w * channel_activations[channel_key][feature]
         return total
 
-    immersion_raw = weighted_sum(IMMERSION_WEIGHTS, "mean")
+    immersion_raw = weighted_sum(IMMERSION_WEIGHTS, "engagement")
     hook_raw      = weighted_sum(HOOK_WEIGHTS,      "hook_3s")
     peak_end_raw  = weighted_sum(PEAK_END_WEIGHTS,  "peak_end_3s")
 
-    # Per-second immersion for the temporal score / drop detector.
+    # Per-second immersion: rectify each channel's signal per timestep before
+    # applying weights. A +1 channel contributes when it's above baseline; a
+    # -1 channel contributes when it's below baseline (suppressed).
     any_channel = next(iter(channel_activations.values()))
     n_timesteps = len(any_channel["temporal_activation"])
     temporal_raw = np.zeros(n_timesteps)
     for channel_key, w in IMMERSION_WEIGHTS.items():
         if channel_key in channel_activations:
-            ts = np.array(channel_activations[channel_key]["temporal_activation"])
-            temporal_raw += w * ts
+            data = channel_activations[channel_key]
+            ts = np.array(data["temporal_activation"])
+            rectified = np.maximum(0.0, data["polarity"] * ts)
+            temporal_raw += w * rectified
 
-    temporal_scores = [100.0 * _sigmoid(float(x)) for x in temporal_raw]
+    temporal_scores = [
+        100.0 * _sigmoid(float(x - TEMPORAL_OFFSET)) for x in temporal_raw
+    ]
 
     virality_raw = (
         SIGNATURE_WEIGHTS["immersion"] * immersion_raw
         + SIGNATURE_WEIGHTS["hook"]     * hook_raw
         + SIGNATURE_WEIGHTS["peak_end"] * peak_end_raw
     )
-    overall_score = 100.0 * _sigmoid(virality_raw)
+    overall_score = 100.0 * _sigmoid(virality_raw - OVERALL_OFFSET)
 
-    # Pass through per-channel data for the UI, annotated with each channel's
-    # signed contribution to the immersion signature (makes the composite
-    # interpretable to the viewer).
+    # Per-channel contribution is always ≥ 0 now (weight ≥ 0, engagement ≥ 0).
+    # It represents "how much did this channel do what we wanted it to do,
+    # weighted by how important that channel is to virality."
     channels_out = {}
     for channel_key, data in channel_activations.items():
         immersion_weight = IMMERSION_WEIGHTS.get(channel_key, 0.0)
         channels_out[channel_key] = {
             **data,
             "immersion_weight": immersion_weight,
-            "immersion_contribution": immersion_weight * data["mean"],
+            "immersion_contribution": immersion_weight * data["engagement"],
         }
 
     return {
         "overall_score": round(overall_score, 1),
         "signatures": {
-            "immersion": round(float(_sigmoid(immersion_raw)), 3),
-            "hook":      round(float(_sigmoid(hook_raw)),      3),
-            "peak_end":  round(float(_sigmoid(peak_end_raw)),  3),
+            "immersion": round(float(_sigmoid(immersion_raw - OVERALL_OFFSET)), 3),
+            "hook":      round(float(_sigmoid(hook_raw     - OVERALL_OFFSET)), 3),
+            "peak_end":  round(float(_sigmoid(peak_end_raw - OVERALL_OFFSET)), 3),
         },
         "temporal_scores": temporal_scores,
         "channels": channels_out,

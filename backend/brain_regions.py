@@ -211,15 +211,19 @@ SIGNATURE_WEIGHTS = {"immersion": 0.60, "hook": 0.20, "peak_end": 0.20}
 
 
 class BrainRegionMapper:
-    """Maps fsaverage5 vertex predictions to engagement-relevant brain regions."""
+    """Maps fsaverage5 vertex predictions to evidence-grounded channels.
+
+    Vertices are assigned to exactly one channel via DEDUP_PRIORITY so that
+    overlapping patterns (e.g. fusiform appearing in both visual and social
+    regions in the atlas) don't double-count in the composite score.
+    """
 
     def __init__(self):
-        self.region_masks = {}
-        self.labels = None
+        self.channel_masks: dict[str, np.ndarray] = {}
+        self.all_labels: np.ndarray | None = None
         self._initialized = False
 
     def initialize(self):
-        """Load the Destrieux atlas and build vertex masks per engagement category."""
         if self._initialized:
             return
 
@@ -232,66 +236,81 @@ class BrainRegionMapper:
         atlas = datasets.fetch_atlas_surf_destrieux()
         labels_lh = atlas["map_left"]
         labels_rh = atlas["map_right"]
-        label_names = [label.decode() if isinstance(label, bytes) else label for label in atlas["labels"]]
+        label_names = [
+            label.decode() if isinstance(label, bytes) else label
+            for label in atlas["labels"]
+        ]
+        self.all_labels = np.concatenate([labels_lh, labels_rh])
 
-        all_labels = np.concatenate([labels_lh, labels_rh])
-
-        for category_key, category_info in ENGAGEMENT_CATEGORIES.items():
-            mask = np.zeros(len(all_labels), dtype=bool)
-            for pattern in category_info["label_patterns"]:
+        # Build a raw pattern-match mask per channel (before dedup).
+        raw_masks: dict[str, np.ndarray] = {}
+        for channel_key, channel_info in CHANNELS.items():
+            mask = np.zeros(len(self.all_labels), dtype=bool)
+            for pattern in channel_info["patterns"]:
                 for idx, name in enumerate(label_names):
                     if pattern.lower() in name.lower():
-                        mask |= (all_labels == idx)
-            self.region_masks[category_key] = mask
+                        mask |= (self.all_labels == idx)
+            raw_masks[channel_key] = mask
 
-        self.labels = all_labels
+        # Apply priority order: each vertex goes to the first channel in
+        # DEDUP_PRIORITY whose raw mask includes it.
+        claimed = np.zeros(len(self.all_labels), dtype=bool)
+        for channel_key in DEDUP_PRIORITY:
+            mask = raw_masks[channel_key] & ~claimed
+            self.channel_masks[channel_key] = mask
+            claimed |= mask
+
         self._initialized = True
 
-    def compute_region_activations(self, predictions: np.ndarray) -> dict:
-        """
-        Compute mean activation per engagement category over time.
+    def compute_channel_activations(self, predictions: np.ndarray) -> dict:
+        """Compute per-channel temporal activation and summary features.
 
         Args:
             predictions: Shape (n_timesteps, n_vertices) from TRIBE v2.
 
         Returns:
-            Dictionary with per-category temporal activation arrays and summary stats.
+            Dict keyed by channel name. Each value has:
+              - temporal_activation: list[float] per-second channel mean
+              - mean, hook_3s, peak_end_3s: scalar features
+              - n_vertices, polarity, display_name, description, citation
         """
         self.initialize()
 
-        n_timesteps = predictions.shape[0]
-        n_vertices_pred = predictions.shape[1]
-        n_vertices_atlas = len(self.labels)
+        n_timesteps, n_vertices_pred = predictions.shape
+        n_vertices_atlas = len(self.all_labels)
 
-        # Handle vertex count mismatch by trimming or zero-padding
+        # Handle vertex count mismatch by trimming both sides to the min.
         if n_vertices_pred != n_vertices_atlas:
             min_v = min(n_vertices_pred, n_vertices_atlas)
-            trimmed_masks = {}
-            for key, mask in self.region_masks.items():
-                trimmed_masks[key] = mask[:min_v]
+            trimmed_masks = {k: m[:min_v] for k, m in self.channel_masks.items()}
             predictions = predictions[:, :min_v]
         else:
-            trimmed_masks = self.region_masks
+            trimmed_masks = self.channel_masks
 
         results = {}
-        for category_key, category_info in ENGAGEMENT_CATEGORIES.items():
-            mask = trimmed_masks[category_key]
+        for channel_key, channel_info in CHANNELS.items():
+            mask = trimmed_masks[channel_key]
             if mask.sum() == 0:
-                temporal_activation = np.zeros(n_timesteps)
+                temporal = np.zeros(n_timesteps)
             else:
-                temporal_activation = predictions[:, mask].mean(axis=1)
+                temporal = predictions[:, mask].mean(axis=1)
 
-            results[category_key] = {
-                "temporal_activation": temporal_activation.tolist(),
-                "mean_activation": float(np.mean(temporal_activation)),
-                "peak_activation": float(np.max(temporal_activation)),
-                "min_activation": float(np.min(temporal_activation)),
-                "std_activation": float(np.std(temporal_activation)),
+            if n_timesteps >= 3:
+                hook = float(np.mean(temporal[:3]))
+                peak_end = float(np.mean(temporal[-3:]))
+            else:
+                hook = peak_end = float(np.mean(temporal))
+
+            results[channel_key] = {
+                "temporal_activation": temporal.tolist(),
+                "mean": float(np.mean(temporal)),
+                "hook_3s": hook,
+                "peak_end_3s": peak_end,
                 "n_vertices": int(mask.sum()),
-                "weight": category_info["weight"],
-                "polarity": category_info["polarity"],
-                "display_name": category_info["display_name"],
-                "description": category_info["description"],
+                "polarity": channel_info["polarity"],
+                "display_name": channel_info["display_name"],
+                "description": channel_info["description"],
+                "citation": channel_info["citation"],
             }
 
         return results

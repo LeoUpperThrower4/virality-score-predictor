@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Virality Score Predictor</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #13131a;
+      --surface-2: #1c1c28;
+      --border: #2a2a3a;
+      --text: #e4e4ed;
+      --text-muted: #8888a0;
+      --accent: #7c5cfc;
+      --accent-soft: rgba(124, 92, 252, 0.12);
+      --green: #34d399;
+      --green-soft: rgba(52, 211, 153, 0.12);
+      --yellow: #fbbf24;
+      --yellow-soft: rgba(251, 191, 36, 0.12);
+      --red: #f87171;
+      --red-soft: rgba(248, 113, 113, 0.12);
+      --orange: #fb923c;
+      --orange-soft: rgba(251, 146, 60, 0.12);
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    .container { max-width: 960px; margin: 0 auto; padding: 40px 24px; }
+
+    .header {
+      text-align: center;
+      margin-bottom: 48px;
+    }
+    .header h1 {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      margin-bottom: 8px;
+    }
+    .header p { color: var(--text-muted); font-size: 15px; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 12px;
+      border-radius: 20px;
+      margin-bottom: 16px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+    .card-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 16px;
+    }
+
+    /* Upload area */
+    .upload-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 60px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: var(--surface);
+    }
+    .upload-zone:hover, .upload-zone.dragover {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+    .upload-zone.has-file {
+      border-color: var(--green);
+      background: var(--green-soft);
+      padding: 24px;
+    }
+    .upload-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.6; }
+    .upload-zone h3 { font-size: 16px; margin-bottom: 8px; }
+    .upload-zone p { font-size: 13px; color: var(--text-muted); }
+
+    .file-info {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .file-info video {
+      width: 120px;
+      height: 68px;
+      object-fit: cover;
+      border-radius: var(--radius-sm);
+      background: #000;
+    }
+    .file-meta { flex: 1; text-align: left; }
+    .file-meta .name { font-weight: 600; font-size: 14px; }
+    .file-meta .size { font-size: 12px; color: var(--text-muted); }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 28px;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover { border-color: var(--text-muted); }
+
+    .actions {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      margin-top: 24px;
+    }
+
+    /* Progress */
+    .progress-bar {
+      width: 100%;
+      height: 4px;
+      background: var(--surface-2);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 20px;
+    }
+    .progress-bar .fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 2px;
+      transition: width 0.3s;
+    }
+    .progress-status {
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+      margin-top: 12px;
+    }
+
+    /* Score ring */
+    .score-section {
+      display: flex;
+      align-items: center;
+      gap: 40px;
+    }
+    .score-ring-container {
+      position: relative;
+      width: 160px;
+      height: 160px;
+      flex-shrink: 0;
+    }
+    .score-ring-container svg { transform: rotate(-90deg); }
+    .score-value {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    .score-number { font-size: 42px; font-weight: 800; letter-spacing: -2px; }
+    .score-label { font-size: 12px; color: var(--text-muted); }
+    .score-details { flex: 1; }
+    .score-tier {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .score-desc { font-size: 14px; color: var(--text-muted); line-height: 1.5; }
+
+    /* Category bars */
+    .category-item {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .category-item:last-child { border-bottom: none; }
+    .cat-name { width: 140px; font-size: 13px; font-weight: 500; flex-shrink: 0; }
+    .cat-bar-track {
+      flex: 1;
+      height: 8px;
+      background: var(--surface-2);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .cat-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.8s ease;
+    }
+    .cat-score { width: 48px; text-align: right; font-size: 13px; font-weight: 600; }
+
+    /* Chart */
+    .chart-container { position: relative; height: 240px; }
+
+    /* Drops */
+    .drop-card {
+      background: var(--surface-2);
+      border-radius: var(--radius-sm);
+      padding: 16px;
+      margin-bottom: 12px;
+      border-left: 3px solid var(--red);
+    }
+    .drop-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .drop-time { font-weight: 700; font-size: 14px; }
+    .drop-severity {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 2px 10px;
+      border-radius: 12px;
+    }
+    .severity-high { background: var(--red-soft); color: var(--red); }
+    .severity-medium { background: var(--orange-soft); color: var(--orange); }
+    .severity-low { background: var(--yellow-soft); color: var(--yellow); }
+    .drop-cause {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    .drop-recommendation {
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      .score-section { flex-direction: column; text-align: center; }
+      .cat-name { width: 100px; font-size: 12px; }
+    }
+
+    /* Spinner */
+    .spinner {
+      width: 20px;
+      height: 20px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Error */
+    .error-box {
+      background: var(--red-soft);
+      border: 1px solid var(--red);
+      border-radius: var(--radius-sm);
+      padding: 16px;
+      color: var(--red);
+      font-size: 14px;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useRef, useEffect, useCallback } = React;
+
+    const API_BASE = window.location.origin;
+
+    // ── Score color helper ──
+    function scoreColor(score) {
+      if (score >= 70) return 'var(--green)';
+      if (score >= 45) return 'var(--yellow)';
+      return 'var(--red)';
+    }
+    function scoreTier(score) {
+      if (score >= 80) return 'Excellent — High Viral Potential';
+      if (score >= 60) return 'Good — Moderate Viral Potential';
+      if (score >= 40) return 'Average — Needs Optimization';
+      if (score >= 20) return 'Below Average — Significant Work Needed';
+      return 'Low — Major Rework Recommended';
+    }
+
+    // ── Format seconds as mm:ss ──
+    function formatTime(seconds) {
+      const m = Math.floor(seconds / 60);
+      const s = seconds % 60;
+      return `${m}:${String(s).padStart(2, '0')}`;
+    }
+
+    // ── Score Ring SVG ──
+    function ScoreRing({ score }) {
+      const r = 68, c = 2 * Math.PI * r;
+      const offset = c - (score / 100) * c;
+      const color = scoreColor(score);
+      return (
+        <div className="score-ring-container">
+          <svg width="160" height="160" viewBox="0 0 160 160">
+            <circle cx="80" cy="80" r={r} fill="none" stroke="var(--surface-2)" strokeWidth="10" />
+            <circle cx="80" cy="80" r={r} fill="none" stroke={color} strokeWidth="10"
+              strokeDasharray={c} strokeDashoffset={offset} strokeLinecap="round"
+              style={{ transition: 'stroke-dashoffset 1s ease' }} />
+          </svg>
+          <div className="score-value">
+            <div className="score-number" style={{ color }}>{Math.round(score)}</div>
+            <div className="score-label">out of 100</div>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Category Bar ──
+    function CategoryBar({ name, score, color }) {
+      return (
+        <div className="category-item">
+          <div className="cat-name">{name}</div>
+          <div className="cat-bar-track">
+            <div className="cat-bar-fill" style={{ width: `${score}%`, background: color || scoreColor(score) }} />
+          </div>
+          <div className="cat-score" style={{ color: color || scoreColor(score) }}>{Math.round(score)}</div>
+        </div>
+      );
+    }
+
+    // ── Temporal Chart ──
+    function TemporalChart({ temporalScores, drops }) {
+      const canvasRef = useRef(null);
+      const chartRef = useRef(null);
+
+      useEffect(() => {
+        if (!canvasRef.current || !temporalScores?.length) return;
+        if (chartRef.current) chartRef.current.destroy();
+
+        const labels = temporalScores.map((_, i) => formatTime(i));
+        const dropSeconds = new Set((drops || []).map(d => d.second));
+
+        const pointColors = temporalScores.map((s, i) =>
+          dropSeconds.has(i) ? 'rgba(248, 113, 113, 1)' : 'transparent'
+        );
+        const pointRadii = temporalScores.map((_, i) => dropSeconds.has(i) ? 5 : 0);
+
+        chartRef.current = new Chart(canvasRef.current, {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [{
+              label: 'Engagement Score',
+              data: temporalScores,
+              borderColor: 'rgba(124, 92, 252, 0.8)',
+              backgroundColor: 'rgba(124, 92, 252, 0.08)',
+              fill: true,
+              tension: 0.3,
+              pointBackgroundColor: pointColors,
+              pointRadius: pointRadii,
+              pointHoverRadius: 6,
+              borderWidth: 2,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: '#1c1c28',
+                titleColor: '#e4e4ed',
+                bodyColor: '#8888a0',
+                borderColor: '#2a2a3a',
+                borderWidth: 1,
+                callbacks: {
+                  title: (items) => `Time: ${items[0].label}`,
+                  label: (item) => {
+                    const sec = item.dataIndex;
+                    const drop = (drops || []).find(d => d.second === sec);
+                    const lines = [`Score: ${Math.round(item.raw)}`];
+                    if (drop) lines.push(`⚠ Drop: ${drop.primary_cause_name}`);
+                    return lines;
+                  },
+                },
+              },
+            },
+            scales: {
+              x: {
+                ticks: { color: '#8888a0', maxTicksLimit: 15, font: { size: 11 } },
+                grid: { color: 'rgba(42,42,58,0.5)' },
+              },
+              y: {
+                min: 0, max: 100,
+                ticks: { color: '#8888a0', font: { size: 11 } },
+                grid: { color: 'rgba(42,42,58,0.5)' },
+              },
+            },
+          },
+        });
+
+        return () => { if (chartRef.current) chartRef.current.destroy(); };
+      }, [temporalScores, drops]);
+
+      return <div className="chart-container"><canvas ref={canvasRef} /></div>;
+    }
+
+    // ── Drop Card ──
+    function DropCard({ drop }) {
+      const severityClass = drop.severity > 20 ? 'severity-high' : drop.severity > 12 ? 'severity-medium' : 'severity-low';
+      return (
+        <div className="drop-card">
+          <div className="drop-header">
+            <span className="drop-time">⏱ {formatTime(drop.second)}</span>
+            <span className={`drop-severity ${severityClass}`}>
+              {drop.severity > 20 ? 'High' : drop.severity > 12 ? 'Medium' : 'Low'} ({drop.severity})
+            </span>
+          </div>
+          <div className="drop-cause">
+            Score: {drop.score_before} → {drop.score_after} &nbsp;|&nbsp; Cause: {drop.primary_cause_name}
+          </div>
+          <div className="drop-recommendation">{drop.recommendation}</div>
+        </div>
+      );
+    }
+
+    // ── Main App ──
+    function App() {
+      const [file, setFile] = useState(null);
+      const [preview, setPreview] = useState(null);
+      const [analyzing, setAnalyzing] = useState(false);
+      const [progress, setProgress] = useState(0);
+      const [progressText, setProgressText] = useState('');
+      const [results, setResults] = useState(null);
+      const [error, setError] = useState(null);
+      const [dragover, setDragover] = useState(false);
+      const inputRef = useRef(null);
+
+      const handleFile = useCallback((f) => {
+        if (!f) return;
+        const ext = f.name.split('.').pop()?.toLowerCase();
+        if (!['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(ext)) {
+          setError('Unsupported file type. Please upload an MP4, MOV, AVI, MKV, or WebM video.');
+          return;
+        }
+        setFile(f);
+        setPreview(URL.createObjectURL(f));
+        setResults(null);
+        setError(null);
+      }, []);
+
+      const handleDrop = useCallback((e) => {
+        e.preventDefault();
+        setDragover(false);
+        const f = e.dataTransfer?.files?.[0];
+        if (f) handleFile(f);
+      }, [handleFile]);
+
+      const analyze = async () => {
+        if (!file) return;
+        setAnalyzing(true);
+        setError(null);
+        setResults(null);
+        setProgress(0);
+
+        // Simulate progress steps (real inference takes time)
+        const steps = [
+          [5, 'Uploading video...'],
+          [15, 'Extracting multimodal events (WhisperX transcription)...'],
+          [30, 'Processing visual features (V-JEPA2)...'],
+          [45, 'Processing audio features (Wav2Vec-BERT)...'],
+          [55, 'Processing language features (LLaMA 3.2)...'],
+          [70, 'Running TRIBE v2 brain prediction (fsaverage5, ~20k vertices)...'],
+          [85, 'Mapping brain regions (Destrieux atlas)...'],
+          [92, 'Computing virality score...'],
+        ];
+        let stepIdx = 0;
+        const timer = setInterval(() => {
+          if (stepIdx < steps.length) {
+            setProgress(steps[stepIdx][0]);
+            setProgressText(steps[stepIdx][1]);
+            stepIdx++;
+          }
+        }, 3000);
+
+        try {
+          const formData = new FormData();
+          formData.append('file', file);
+          const res = await fetch(`${API_BASE}/api/analyze`, { method: 'POST', body: formData });
+          clearInterval(timer);
+
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
+            throw new Error(err.detail || `Server error (${res.status})`);
+          }
+
+          setProgress(100);
+          setProgressText('Analysis complete!');
+          const data = await res.json();
+          setResults(data);
+        } catch (e) {
+          clearInterval(timer);
+          setError(e.message);
+        } finally {
+          setAnalyzing(false);
+        }
+      };
+
+      const reset = () => {
+        setFile(null);
+        setPreview(null);
+        setResults(null);
+        setError(null);
+        setProgress(0);
+        setProgressText('');
+        if (inputRef.current) inputRef.current.value = '';
+      };
+
+      // Sort categories for display
+      const sortedCategories = results?.category_scores
+        ? Object.entries(results.category_scores).sort((a, b) => b[1].score - a[1].score)
+        : [];
+
+      return (
+        <div className="container">
+          <div className="header">
+            <div className="badge">◉ TRIBE v2 Powered</div>
+            <h1>Virality Score Predictor</h1>
+            <p>Upload an Instagram Reel to predict its viral potential using neural brain-response modeling.</p>
+          </div>
+
+          {/* Upload Area */}
+          {!results && (
+            <div
+              className={`upload-zone ${dragover ? 'dragover' : ''} ${file ? 'has-file' : ''}`}
+              onClick={() => !file && inputRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); setDragover(true); }}
+              onDragLeave={() => setDragover(false)}
+              onDrop={handleDrop}
+            >
+              <input ref={inputRef} type="file" accept="video/*" hidden onChange={(e) => handleFile(e.target.files?.[0])} />
+              {!file ? (
+                <>
+                  <div className="upload-icon">🎬</div>
+                  <h3>Drop your video here or click to browse</h3>
+                  <p>Supports MP4, MOV, AVI, MKV, WebM — up to 500 MB</p>
+                </>
+              ) : (
+                <div className="file-info">
+                  <video src={preview} muted />
+                  <div className="file-meta">
+                    <div className="name">{file.name}</div>
+                    <div className="size">{(file.size / 1024 / 1024).toFixed(1)} MB</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Actions */}
+          {file && !results && !analyzing && (
+            <div className="actions">
+              <button className="btn btn-ghost" onClick={reset}>Remove</button>
+              <button className="btn btn-primary" onClick={analyze}>Analyze Video</button>
+            </div>
+          )}
+
+          {/* Progress */}
+          {analyzing && (
+            <div className="card">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div className="spinner" />
+                <span style={{ fontSize: 14, fontWeight: 600 }}>Analyzing...</span>
+              </div>
+              <div className="progress-bar">
+                <div className="fill" style={{ width: `${progress}%` }} />
+              </div>
+              <div className="progress-status">{progressText}</div>
+            </div>
+          )}
+
+          {/* Error */}
+          {error && <div className="error-box">⚠ {error}</div>}
+
+          {/* Results */}
+          {results && (
+            <>
+              {/* Score Card */}
+              <div className="card">
+                <div className="card-title">Virality Score</div>
+                <div className="score-section">
+                  <ScoreRing score={results.virality_score} />
+                  <div className="score-details">
+                    <div className="score-tier" style={{ color: scoreColor(results.virality_score) }}>
+                      {scoreTier(results.virality_score)}
+                    </div>
+                    <div className="score-desc">
+                      Analyzed {results.video_duration_seconds}s of video across {results.prediction_timesteps} timesteps,
+                      mapping brain responses across {results.n_vertices_analyzed?.toLocaleString()} cortical vertices.
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Category Breakdown */}
+              <div className="card">
+                <div className="card-title">Engagement Categories</div>
+                {sortedCategories.map(([key, cat]) => (
+                  <CategoryBar key={key} name={cat.display_name} score={cat.score} />
+                ))}
+              </div>
+
+              {/* Temporal Chart */}
+              <div className="card">
+                <div className="card-title">Engagement Over Time</div>
+                <TemporalChart temporalScores={results.temporal_scores} drops={results.engagement_drops} />
+              </div>
+
+              {/* Engagement Drops */}
+              {results.engagement_drops?.length > 0 && (
+                <div className="card">
+                  <div className="card-title">
+                    Engagement Drops & Recommendations ({results.engagement_drops.length})
+                  </div>
+                  {results.engagement_drops.map((drop, i) => (
+                    <DropCard key={i} drop={drop} />
+                  ))}
+                </div>
+              )}
+
+              {/* New Analysis Button */}
+              <div className="actions">
+                <button className="btn btn-primary" onClick={reset}>Analyze Another Video</button>
+              </div>
+            </>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

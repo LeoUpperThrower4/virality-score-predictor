@@ -1,0 +1,22 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - LOAD_MODEL_ON_STARTUP=true
+      - MAX_FILE_SIZE_MB=500
+    volumes:
+      - model-cache:/app/cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    # Remove the 'deploy' block above if running on CPU only
+
+volumes:
+  model-cache:

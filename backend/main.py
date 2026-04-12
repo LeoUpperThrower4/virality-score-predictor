@@ -85,11 +85,12 @@ async def analyze_video(file: UploadFile = File(...)):
     Upload a video and receive a virality score with detailed analysis.
 
     The response includes:
-    - **virality_score**: 0–100 composite score
+    - **virality_score**: 0–100 composite
+    - **signatures**: {immersion, hook, peak_end} sub-scores (0–1 each)
     - **temporal_scores**: Per-second engagement scores
-    - **category_scores**: Breakdown by brain engagement category
+    - **channels**: Per-brain-channel activation with polarity, weights, and citation
     - **engagement_drops**: Detected drops with causes and recommendations
-    - **summary**: Human-readable analysis report
+    - **summary**: Human-readable markdown analysis report
     """
     # Validate file extension
     ext = Path(file.filename or "").suffix.lower()

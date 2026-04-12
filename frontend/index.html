@@ -548,9 +548,13 @@
         if (inputRef.current) inputRef.current.value = '';
       };
 
-      // Sort categories for display
-      const sortedCategories = results?.category_scores
-        ? Object.entries(results.category_scores).sort((a, b) => b[1].score - a[1].score)
+      // Sort channels by absolute contribution to the immersion signature
+      const sortedChannels = results?.channels
+        ? Object.entries(results.channels).sort(
+            (a, b) =>
+              Math.abs(b[1].immersion_contribution) -
+              Math.abs(a[1].immersion_contribution)
+          )
         : [];
 
       return (
@@ -634,12 +638,27 @@
                 </div>
               </div>
 
-              {/* Category Breakdown */}
+              {/* Signature sub-scores */}
+              {results.signatures && (
+                <div className="card">
+                  <div className="card-title">Signatures</div>
+                  <CategoryBar name="Immersion (overall)"      score={results.signatures.immersion * 100} />
+                  <CategoryBar name="Hook (first 3s)"          score={results.signatures.hook * 100} />
+                  <CategoryBar name="Peak-End (last 3s)"       score={results.signatures.peak_end * 100} />
+                </div>
+              )}
+
+              {/* Channel Breakdown */}
               <div className="card">
-                <div className="card-title">Engagement Categories</div>
-                {sortedCategories.map(([key, cat]) => (
-                  <CategoryBar key={key} name={cat.display_name} score={cat.score} />
-                ))}
+                <div className="card-title">Brain Channels</div>
+                {sortedChannels.map(([key, ch]) => {
+                  const contribPct = Math.min(100, Math.abs(ch.immersion_contribution) * 300);
+                  const label =
+                    ch.polarity === -1
+                      ? `${ch.display_name} (lower is better)`
+                      : ch.display_name;
+                  return <CategoryBar key={key} name={label} score={contribPct} />;
+                })}
               </div>
 
               {/* Temporal Chart */}

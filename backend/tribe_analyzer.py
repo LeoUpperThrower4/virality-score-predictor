@@ -92,17 +92,17 @@ class TribeAnalyzer:
             f"predictions shape: {predictions.shape}"
         )
 
-        # Step 3: Map predictions to brain regions
-        logger.info("Computing brain region activations...")
-        region_activations = self.region_mapper.compute_region_activations(predictions)
+        # Step 3: Map predictions to brain channels
+        logger.info("Computing brain channel activations...")
+        channel_activations = self.region_mapper.compute_channel_activations(predictions)
 
-        # Step 4: Compute virality score
-        virality_data = compute_virality_score(region_activations)
+        # Step 4: Compute virality score (immersion + hook + peak-end signatures)
+        virality_data = compute_virality_score(channel_activations)
 
         # Step 5: Detect engagement drops
         drops = analyze_engagement_drops(
             virality_data["temporal_scores"],
-            region_activations,
+            channel_activations,
         )
 
         # Step 6: Estimate video duration. TRIBE v2 predictions are at 1 TR (~1s)
@@ -115,8 +115,9 @@ class TribeAnalyzer:
 
         return {
             "virality_score": virality_data["overall_score"],
+            "signatures": virality_data["signatures"],
             "temporal_scores": virality_data["temporal_scores"],
-            "category_scores": virality_data["category_scores"],
+            "channels": virality_data["channels"],
             "engagement_drops": drops,
             "summary": summary,
             "video_duration_seconds": video_duration,

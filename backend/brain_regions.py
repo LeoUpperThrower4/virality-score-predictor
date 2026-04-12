@@ -14,6 +14,16 @@ try:
 except ImportError:
     NILEARN_AVAILABLE = False
 
+
+def _sigmoid(x: float) -> float:
+    """Numerically stable logistic sigmoid."""
+    if x >= 0:
+        z = np.exp(-x)
+        return float(1.0 / (1.0 + z))
+    z = np.exp(x)
+    return float(z / (1.0 + z))
+
+
 # ── Evidence-grounded channel schema ─────────────────────────────────────────
 # Each channel maps Destrieux atlas label substrings to a weight and polarity.
 # Polarity: +1 = engagement driver, -1 = disengagement / suppression signal.
@@ -316,68 +326,67 @@ class BrainRegionMapper:
         return results
 
 
-def compute_virality_score(region_activations: dict) -> dict:
-    """
-    Compute a composite virality score from brain region activations.
+def compute_virality_score(channel_activations: dict) -> dict:
+    """Compute composite virality from channel activations.
 
-    The score is a weighted combination of engagement-positive regions
-    minus engagement-negative regions (default mode network), normalized
-    to a 0–100 scale.
+    Three signatures — immersion (full), hook (first 3s), peak-end (last 3s) —
+    are each a signed weighted sum of channel features. Raw TRIBE outputs feed
+    directly into the sums; no per-clip min-max rescaling.
 
     Returns:
-        Dictionary with overall score, category breakdown, and temporal scores.
+        Dict with overall_score (0-100), signatures, temporal_scores,
+        and channels (feature dump for the UI).
     """
-    weighted_temporal = None
-    total_weight = 0
-    category_scores = {}
+    def weighted_sum(weights: dict, feature: str) -> float:
+        total = 0.0
+        for channel_key, w in weights.items():
+            if channel_key in channel_activations:
+                total += w * channel_activations[channel_key][feature]
+        return total
 
-    for key, data in region_activations.items():
-        temporal = np.array(data["temporal_activation"])
-        polarity = data["polarity"]
-        weight = data["weight"]
+    immersion_raw = weighted_sum(IMMERSION_WEIGHTS, "mean")
+    hook_raw      = weighted_sum(HOOK_WEIGHTS,      "hook_3s")
+    peak_end_raw  = weighted_sum(PEAK_END_WEIGHTS,  "peak_end_3s")
 
-        # Normalize each category's activation to 0-1 range
-        t_min, t_max = temporal.min(), temporal.max()
-        if t_max - t_min > 1e-8:
-            normalized = (temporal - t_min) / (t_max - t_min)
-        else:
-            normalized = np.full_like(temporal, 0.5)
+    # Per-second immersion for the temporal score / drop detector.
+    any_channel = next(iter(channel_activations.values()))
+    n_timesteps = len(any_channel["temporal_activation"])
+    temporal_raw = np.zeros(n_timesteps)
+    for channel_key, w in IMMERSION_WEIGHTS.items():
+        if channel_key in channel_activations:
+            ts = np.array(channel_activations[channel_key]["temporal_activation"])
+            temporal_raw += w * ts
 
-        # For negative polarity (DMN), invert so "score" means engagement:
-        # high DMN activation = low engagement score.
-        if polarity == -1:
-            engagement = 1.0 - normalized
-        else:
-            engagement = normalized
+    temporal_scores = [100.0 * _sigmoid(float(x)) for x in temporal_raw]
 
-        category_scores[key] = {
-            "score": float(np.mean(engagement) * 100),
-            "temporal_scores": (engagement * 100).tolist(),
-            "display_name": data["display_name"],
-            "description": data["description"],
-            "weight": weight,
+    virality_raw = (
+        SIGNATURE_WEIGHTS["immersion"] * immersion_raw
+        + SIGNATURE_WEIGHTS["hook"]     * hook_raw
+        + SIGNATURE_WEIGHTS["peak_end"] * peak_end_raw
+    )
+    overall_score = 100.0 * _sigmoid(virality_raw)
+
+    # Pass through per-channel data for the UI, annotated with each channel's
+    # signed contribution to the immersion signature (makes the composite
+    # interpretable to the viewer).
+    channels_out = {}
+    for channel_key, data in channel_activations.items():
+        immersion_weight = IMMERSION_WEIGHTS.get(channel_key, 0.0)
+        channels_out[channel_key] = {
+            **data,
+            "immersion_weight": immersion_weight,
+            "immersion_contribution": immersion_weight * data["mean"],
         }
-
-        # All categories already point in the engagement direction after the
-        # polarity flip above, so contributions are additive with positive weights.
-        contribution = engagement * weight
-        if weighted_temporal is None:
-            weighted_temporal = contribution
-        else:
-            weighted_temporal += contribution
-        total_weight += weight
-
-    # Normalize by total weight to stay within [0, 1], then scale to 0-100.
-    if total_weight > 0:
-        weighted_temporal /= total_weight
-
-    overall_temporal = np.clip(weighted_temporal * 100, 0, 100).tolist()
-    overall_score = float(np.mean(overall_temporal))
 
     return {
         "overall_score": round(overall_score, 1),
-        "temporal_scores": overall_temporal,
-        "category_scores": category_scores,
+        "signatures": {
+            "immersion": round(float(_sigmoid(immersion_raw)), 3),
+            "hook":      round(float(_sigmoid(hook_raw)),      3),
+            "peak_end":  round(float(_sigmoid(peak_end_raw)),  3),
+        },
+        "temporal_scores": temporal_scores,
+        "channels": channels_out,
     }
 
 

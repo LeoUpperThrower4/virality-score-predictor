@@ -553,11 +553,11 @@ def generate_summary(
     drops: list[dict],
     video_duration: float,
 ) -> str:
-    """Generate a human-readable summary of the virality analysis."""
+    """Human-readable summary showing signature sub-scores and channel breakdown."""
     score = virality_data["overall_score"]
-    categories = virality_data["category_scores"]
+    sigs = virality_data["signatures"]
+    channels = virality_data["channels"]
 
-    # Tier classification
     if score >= 80:
         tier = "Excellent — High viral potential"
     elif score >= 60:
@@ -574,18 +574,33 @@ def generate_summary(
         "",
         f"Video duration analyzed: {video_duration:.0f} seconds",
         "",
-        "### Category Breakdown",
+        "### Signature Breakdown",
+        "",
+        f"- **Immersion** (overall): {sigs['immersion']:.2f}",
+        f"- **Hook** (first 3s):    {sigs['hook']:.2f}",
+        f"- **Peak-End** (last 3s): {sigs['peak_end']:.2f}",
+        "",
+        "### Top Engagement Drivers",
         "",
     ]
 
-    sorted_cats = sorted(categories.items(), key=lambda x: x[1]["score"], reverse=True)
-    for key, cat in sorted_cats:
-        lines.append(f"- **{cat['display_name']}**: {cat['score']:.1f}/100 — {cat['description']}")
+    # Sort channels by absolute immersion contribution (positive or negative).
+    sorted_channels = sorted(
+        channels.items(),
+        key=lambda kv: abs(kv[1]["immersion_contribution"]),
+        reverse=True,
+    )
+    for key, ch in sorted_channels[:8]:
+        sign = "+" if ch["immersion_contribution"] >= 0 else "−"
+        polarity_note = " (lower is better)" if ch["polarity"] == -1 else ""
+        lines.append(
+            f"- **{ch['display_name']}**{polarity_note}: "
+            f"contribution {sign}{abs(ch['immersion_contribution']):.3f} "
+            f"— {ch['description']}"
+        )
 
     if drops:
-        lines.append("")
-        lines.append("### Key Engagement Drops")
-        lines.append("")
+        lines.extend(["", "### Key Engagement Drops", ""])
         for i, drop in enumerate(drops[:5], 1):
             lines.append(f"**Drop {i} — Second {drop['second']}** (severity: {drop['severity']})")
             lines.append(f"Score went from {drop['score_before']} → {drop['score_after']}")
@@ -593,9 +608,11 @@ def generate_summary(
             lines.append(f"→ {drop['recommendation']}")
             lines.append("")
     else:
-        lines.append("")
-        lines.append("### Engagement")
-        lines.append("")
-        lines.append("No significant engagement drops detected — the content maintains consistent viewer attention.")
+        lines.extend([
+            "",
+            "### Engagement",
+            "",
+            "No significant engagement drops detected — the content maintains consistent viewer attention.",
+        ])
 
     return "\n".join(lines)

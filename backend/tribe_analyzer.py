@@ -130,23 +130,27 @@ class TribeAnalyzer:
             autocast_ctx = nullcontext()
 
         try:
+            # Step 1: Extract events (audio, text, video features). This runs
+            # V-JEPA2 and w2v-bert and is 97% of wall time — autocast here is
+            # where the speedup comes from.
+            logger.info("Extracting multimodal events...")
+            start = time.time()
             with autocast_ctx:
-                # Step 1: Extract events (audio, text, video features)
-                logger.info("Extracting multimodal events...")
-                start = time.time()
                 events_df = self.model.get_events_dataframe(video_path=str(inference_path))
-                logger.info(
-                    f"Events extracted in {time.time() - start:.1f}s — {len(events_df)} events"
-                )
+            logger.info(
+                f"Events extracted in {time.time() - start:.1f}s — {len(events_df)} events"
+            )
 
-                # Step 2: Predict brain responses
-                logger.info("Running TRIBE v2 inference...")
-                start = time.time()
-                predictions, segments = self.model.predict(events=events_df)
-                logger.info(
-                    f"Inference complete in {time.time() - start:.1f}s — "
-                    f"predictions shape: {predictions.shape}"
-                )
+            # Step 2: Predict brain responses. Run in fp32 because TRIBE's
+            # predict() calls .cpu().numpy() on the output tensor, and numpy
+            # doesn't support BFloat16 scalars.
+            logger.info("Running TRIBE v2 inference...")
+            start = time.time()
+            predictions, segments = self.model.predict(events=events_df)
+            logger.info(
+                f"Inference complete in {time.time() - start:.1f}s — "
+                f"predictions shape: {predictions.shape}"
+            )
         finally:
             if downsampled_path is not None:
                 downsampled_path.unlink(missing_ok=True)

@@ -137,6 +137,18 @@ class TribeAnalyzer:
             start = time.time()
             with autocast_ctx:
                 events_df = self.model.get_events_dataframe(video_path=str(inference_path))
+            # Autocast leaves extracted features as bfloat16 tensors in the
+            # events dataframe; TRIBE's predict() ultimately calls .cpu().numpy()
+            # which does not support bfloat16. Cast back to fp32 here so the
+            # downstream transformer runs cleanly.
+            try:
+                import torch
+                for col in events_df.columns:
+                    for i, val in enumerate(events_df[col]):
+                        if isinstance(val, torch.Tensor) and val.dtype == torch.bfloat16:
+                            events_df.at[i, col] = val.to(torch.float32)
+            except Exception:
+                logger.exception("Failed to cast events_df bfloat16 tensors to fp32")
             logger.info(
                 f"Events extracted in {time.time() - start:.1f}s — {len(events_df)} events"
             )

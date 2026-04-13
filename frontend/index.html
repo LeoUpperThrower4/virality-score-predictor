@@ -522,8 +522,16 @@
           clearInterval(timer);
 
           if (!res.ok) {
-            const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
-            throw new Error(err.detail || `Server error (${res.status})`);
+            const text = await res.text().catch(() => '');
+            let detail = text;
+            try {
+              const parsed = JSON.parse(text);
+              detail = parsed.detail || text;
+            } catch {}
+            if (res.status === 502 || res.status === 504) {
+              detail = `Proxy timeout (${res.status}). TRIBE inference on long clips exceeds the RunPod HTTPS proxy limit — use an SSH tunnel to localhost:8000 instead. Detail: ${detail.slice(0, 200)}`;
+            }
+            throw new Error(detail || `Server error (${res.status})`);
           }
 
           setProgress(100);

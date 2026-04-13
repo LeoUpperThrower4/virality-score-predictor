@@ -7,7 +7,9 @@ brain-response predictions used for virality scoring.
 
 import logging
 import os
+import subprocess
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +26,31 @@ logger = logging.getLogger(__name__)
 # Required for large model downloads from HuggingFace
 os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "300")
 os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "300")
+
+
+def _downsample_video(src: Path, fps: int = 8, size: int = 256) -> Path:
+    """Reduce fps and resize to `size`x`size` via ffmpeg; keep audio untouched.
+
+    V-JEPA2 resizes to 256 internally and 30→8 fps cuts ~4x frames, so this
+    trades a bit of temporal fidelity for a big speedup in video encoding.
+    """
+    dst = src.with_name(src.stem + f"_ds{fps}fps.mp4")
+    vf = (
+        f"fps={fps},"
+        f"scale={size}:{size}:force_original_aspect_ratio=decrease,"
+        f"pad={size}:{size}:(ow-iw)/2:(oh-ih)/2"
+    )
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-i", str(src),
+            "-vf", vf,
+            "-c:a", "copy",
+            str(dst),
+        ],
+        check=True,
+    )
+    return dst
 
 
 class TribeAnalyzer:
@@ -57,12 +84,15 @@ class TribeAnalyzer:
         self.region_mapper.initialize()
         logger.info("Brain region mapper ready.")
 
-    def analyze_video(self, video_path: str) -> dict:
+    def analyze_video(self, video_path: str, downsample: bool = False) -> dict:
         """
         Run the full analysis pipeline on a video file.
 
         Args:
             video_path: Path to the video file (mp4, mov, etc.).
+            downsample: If True, pre-process the video to 8 fps / 256×256 before
+                TRIBE sees it. Roughly 2–4× faster video-feature extraction at
+                the cost of some temporal fidelity.
 
         Returns:
             Complete analysis results with virality score, temporal data,
@@ -75,22 +105,51 @@ class TribeAnalyzer:
         if not video_path.exists():
             raise FileNotFoundError(f"Video not found: {video_path}")
 
-        logger.info(f"Analyzing video: {video_path.name}")
+        logger.info(f"Analyzing video: {video_path.name} (downsample={downsample})")
 
-        # Step 1: Extract events (audio, text, video features)
-        logger.info("Extracting multimodal events...")
-        start = time.time()
-        events_df = self.model.get_events_dataframe(video_path=str(video_path))
-        logger.info(f"Events extracted in {time.time() - start:.1f}s — {len(events_df)} events")
+        downsampled_path: Path | None = None
+        if downsample:
+            start = time.time()
+            downsampled_path = _downsample_video(video_path)
+            logger.info(f"Downsampled to 8 fps / 256² in {time.time() - start:.1f}s")
+            inference_path = downsampled_path
+        else:
+            inference_path = video_path
 
-        # Step 2: Predict brain responses
-        logger.info("Running TRIBE v2 inference...")
-        start = time.time()
-        predictions, segments = self.model.predict(events=events_df)
-        logger.info(
-            f"Inference complete in {time.time() - start:.1f}s — "
-            f"predictions shape: {predictions.shape}"
-        )
+        # Autocast heavy encoder + transformer work to bf16 on CUDA — 4090/A100
+        # tensor cores roughly double throughput with no observable accuracy loss
+        # on vision transformers. Falls back to a no-op on CPU.
+        try:
+            import torch
+            autocast_ctx = (
+                torch.autocast("cuda", dtype=torch.bfloat16)
+                if torch.cuda.is_available()
+                else nullcontext()
+            )
+        except ImportError:
+            autocast_ctx = nullcontext()
+
+        try:
+            with autocast_ctx:
+                # Step 1: Extract events (audio, text, video features)
+                logger.info("Extracting multimodal events...")
+                start = time.time()
+                events_df = self.model.get_events_dataframe(video_path=str(inference_path))
+                logger.info(
+                    f"Events extracted in {time.time() - start:.1f}s — {len(events_df)} events"
+                )
+
+                # Step 2: Predict brain responses
+                logger.info("Running TRIBE v2 inference...")
+                start = time.time()
+                predictions, segments = self.model.predict(events=events_df)
+                logger.info(
+                    f"Inference complete in {time.time() - start:.1f}s — "
+                    f"predictions shape: {predictions.shape}"
+                )
+        finally:
+            if downsampled_path is not None:
+                downsampled_path.unlink(missing_ok=True)
 
         # Step 3: Map predictions to brain channels
         logger.info("Computing brain channel activations...")

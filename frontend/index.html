@@ -466,6 +466,7 @@
       const [results, setResults] = useState(null);
       const [error, setError] = useState(null);
       const [dragover, setDragover] = useState(false);
+      const [fastMode, setFastMode] = useState(false);
       const inputRef = useRef(null);
 
       const handleFile = useCallback((f) => {
@@ -518,6 +519,7 @@
         try {
           const formData = new FormData();
           formData.append('file', file);
+          if (fastMode) formData.append('downsample', 'true');
           const res = await fetch(`${API_BASE}/api/analyze`, { method: 'POST', body: formData });
           clearInterval(timer);
 
@@ -603,10 +605,20 @@
 
           {/* Actions */}
           {file && !results && !analyzing && (
-            <div className="actions">
-              <button className="btn btn-ghost" onClick={reset}>Remove</button>
-              <button className="btn btn-primary" onClick={analyze}>Analyze Video</button>
-            </div>
+            <>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '12px 0', fontSize: 13, color: '#bbb', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={fastMode}
+                  onChange={(e) => setFastMode(e.target.checked)}
+                />
+                Fast mode (downsample to 8 fps / 256×256 — ~2–4× faster, small accuracy cost)
+              </label>
+              <div className="actions">
+                <button className="btn btn-ghost" onClick={reset}>Remove</button>
+                <button className="btn btn-primary" onClick={analyze}>Analyze Video</button>
+              </div>
+            </>
           )}
 
           {/* Progress */}

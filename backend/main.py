@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 # Load backend/.env before anything else reads os.environ (notably HF_TOKEN).
 load_dotenv(Path(__file__).parent / ".env")
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -80,9 +80,17 @@ async def health_check():
 
 
 @app.post("/api/analyze")
-async def analyze_video(file: UploadFile = File(...)):
+async def analyze_video(
+    file: UploadFile = File(...),
+    downsample: bool = Form(False),
+):
     """
     Upload a video and receive a virality score with detailed analysis.
+
+    Form fields:
+    - **file**: the video (mp4/mov/avi/mkv/webm, up to MAX_FILE_SIZE_MB).
+    - **downsample**: if true, pre-process to 8 fps / 256² before TRIBE sees it
+      — ~2–4× faster, small accuracy cost.
 
     The response includes:
     - **virality_score**: 0–100 composite
@@ -120,7 +128,7 @@ async def analyze_video(file: UploadFile = File(...)):
         logger.info(f"Uploaded {file.filename} ({file_size / 1024 / 1024:.1f} MB) → {upload_path.name}")
 
         # Run TRIBE v2 analysis
-        results = analyzer.analyze_video(str(upload_path))
+        results = analyzer.analyze_video(str(upload_path), downsample=downsample)
 
         return JSONResponse(content={
             "success": True,

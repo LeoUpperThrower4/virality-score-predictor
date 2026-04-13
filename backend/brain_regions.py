@@ -221,20 +221,13 @@ PEAK_END_WEIGHTS = {
 
 SIGNATURE_WEIGHTS = {"immersion": 0.60, "hook": 0.20, "peak_end": 0.20}
 
-# Sigmoid calibration. TRIBE predictions are z-scored per vertex (std≈1), so
-# vertex-level rectified engagement for unrelated / "random" content follows a
-# half-normal with mean = 1/sqrt(2π) ≈ 0.399. Per-signature offsets are
-# derived dynamically from each weight dict's sum, so a neutral clip centers
-# every signature at sigmoid(0) = 0.5 regardless of how many channels feed it.
-# SHARPNESS widens the spread: without it, meaningful-but-small differences
-# in activation (e.g. 0.05) produce only ~1-point virality changes.
-HALF_NORMAL_MEAN = 0.39894228    # 1 / sqrt(2π)
-SHARPNESS = 12.0
-
-
-def _neutral_baseline(weights: dict) -> float:
-    """Expected value of the weighted sum when each channel is noise-only."""
-    return HALF_NORMAL_MEAN * sum(weights.values())
+# Sigmoid calibration. Per-clip adaptive baseline: we measure each channel's
+# rectified mean RELATIVE to the clip's global cortex rectified mean for the
+# same polarity. Delta is zero-centered by construction — a channel with the
+# same engagement level as the rest of cortex scores 0; a differentially
+# active channel scores positive. SHARPNESS widens the spread since real
+# deltas are small (~0.02–0.15).
+SHARPNESS = 25.0
 
 
 class BrainRegionMapper:
@@ -327,38 +320,52 @@ class BrainRegionMapper:
         else:
             trimmed_masks = self.channel_masks
 
+        # Per-clip adaptive baselines: the clip's global cortex rectified mean
+        # for each polarity. A channel's "engagement_delta" is how much it
+        # exceeds this baseline — zero-centered by construction.
+        global_pos = float(np.maximum(0.0, predictions).mean())
+        global_neg = float(np.maximum(0.0, -predictions).mean())
+        per_second_global_pos = np.maximum(0.0, predictions).mean(axis=1)
+        per_second_global_neg = np.maximum(0.0, -predictions).mean(axis=1)
+
         results = {}
         for channel_key, channel_info in CHANNELS.items():
             mask = trimmed_masks[channel_key]
             polarity = channel_info["polarity"]
+            baseline = global_pos if polarity == 1 else global_neg
+            per_second_baseline = (
+                per_second_global_pos if polarity == 1 else per_second_global_neg
+            )
 
             if mask.sum() == 0:
                 temporal = np.zeros(n_timesteps)
-                temporal_engagement = np.zeros(n_timesteps)
+                temporal_delta = np.zeros(n_timesteps)
                 engagement = 0.0
                 hook = 0.0
                 peak_end = 0.0
             else:
-                channel_preds = predictions[:, mask]           # (n_t, n_v_in_channel)
+                channel_preds = predictions[:, mask]            # (n_t, n_v_in_channel)
                 rectified = np.maximum(0.0, polarity * channel_preds)
 
-                temporal = channel_preds.mean(axis=1)           # raw mean per t
-                temporal_engagement = rectified.mean(axis=1)    # rectified mean per t
+                temporal = channel_preds.mean(axis=1)            # raw mean per t
+                temporal_engagement = rectified.mean(axis=1)     # rectified mean per t
+                temporal_delta = temporal_engagement - per_second_baseline
 
-                engagement = float(rectified.mean())            # grand mean of rectified
+                engagement = float(rectified.mean()) - baseline
                 if n_timesteps >= 3:
-                    hook = float(rectified[:3].mean())
-                    peak_end = float(rectified[-3:].mean())
+                    hook = float(rectified[:3].mean()) - baseline
+                    peak_end = float(rectified[-3:].mean()) - baseline
                 else:
                     hook = peak_end = engagement
 
             results[channel_key] = {
                 "temporal_activation": temporal.tolist(),
-                "temporal_engagement": temporal_engagement.tolist(),
+                "temporal_engagement": temporal_delta.tolist(),
                 "engagement": engagement,
                 "hook_3s": hook,
                 "peak_end_3s": peak_end,
                 "mean_raw": float(np.mean(temporal)),
+                "baseline": baseline,
                 "n_vertices": int(mask.sum()),
                 "polarity": polarity,
                 "display_name": channel_info["display_name"],
@@ -392,19 +399,9 @@ def compute_virality_score(channel_activations: dict) -> dict:
     hook_raw      = weighted_sum(HOOK_WEIGHTS,      "hook_3s")
     peak_end_raw  = weighted_sum(PEAK_END_WEIGHTS,  "peak_end_3s")
 
-    # Per-signature neutral baselines — subtracting these centers a
-    # noise-only clip at sigmoid(0) = 0.5 for every signature.
-    imm_offset      = _neutral_baseline(IMMERSION_WEIGHTS)
-    hook_offset     = _neutral_baseline(HOOK_WEIGHTS)
-    peak_end_offset = _neutral_baseline(PEAK_END_WEIGHTS)
-    overall_offset = (
-        SIGNATURE_WEIGHTS["immersion"] * imm_offset
-        + SIGNATURE_WEIGHTS["hook"]     * hook_offset
-        + SIGNATURE_WEIGHTS["peak_end"] * peak_end_offset
-    )
-
-    # Per-second immersion: use each channel's per-timestep vertex-level
-    # rectified mean (pre-computed in compute_channel_activations).
+    # engagement / hook_3s / peak_end_3s are deltas vs the clip's own global
+    # cortex baseline, so the weighted sums are zero-centered with no offset.
+    # Per-second scoring uses temporal_engagement which is already delta.
     any_channel = next(iter(channel_activations.values()))
     n_timesteps = len(any_channel["temporal_engagement"])
     temporal_raw = np.zeros(n_timesteps)
@@ -413,17 +410,14 @@ def compute_virality_score(channel_activations: dict) -> dict:
             te = np.array(channel_activations[channel_key]["temporal_engagement"])
             temporal_raw += w * te
 
-    temporal_scores = [
-        100.0 * _sigmoid(SHARPNESS * (float(x) - imm_offset))
-        for x in temporal_raw
-    ]
+    temporal_scores = [100.0 * _sigmoid(SHARPNESS * float(x)) for x in temporal_raw]
 
     virality_raw = (
         SIGNATURE_WEIGHTS["immersion"] * immersion_raw
         + SIGNATURE_WEIGHTS["hook"]     * hook_raw
         + SIGNATURE_WEIGHTS["peak_end"] * peak_end_raw
     )
-    overall_score = 100.0 * _sigmoid(SHARPNESS * (virality_raw - overall_offset))
+    overall_score = 100.0 * _sigmoid(SHARPNESS * virality_raw)
 
     # Per-channel contribution is always ≥ 0 now (weight ≥ 0, engagement ≥ 0).
     # It represents "how much did this channel do what we wanted it to do,
@@ -440,9 +434,9 @@ def compute_virality_score(channel_activations: dict) -> dict:
     return {
         "overall_score": round(overall_score, 1),
         "signatures": {
-            "immersion": round(float(_sigmoid(SHARPNESS * (immersion_raw - imm_offset))), 3),
-            "hook":      round(float(_sigmoid(SHARPNESS * (hook_raw     - hook_offset))), 3),
-            "peak_end":  round(float(_sigmoid(SHARPNESS * (peak_end_raw - peak_end_offset))), 3),
+            "immersion": round(float(_sigmoid(SHARPNESS * immersion_raw)), 3),
+            "hook":      round(float(_sigmoid(SHARPNESS * hook_raw)),      3),
+            "peak_end":  round(float(_sigmoid(SHARPNESS * peak_end_raw)),  3),
         },
         "temporal_scores": temporal_scores,
         "channels": channels_out,
